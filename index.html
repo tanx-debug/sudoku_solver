@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sudoku Solver</title>
+<style>
+:root{--bg:#f6f5f1;--fg:#1d1d1b;--muted:#6b6a64;--cell:#fff;--line:#c9c7be;--thick:#1d1d1b;--accent:#3b6fd4;--solved:#2f7d4f;--err:#c0392b;--btn:#1d1d1b;--btnfg:#fff;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171716;--fg:#ecebe5;--muted:#9a988f;--cell:#232321;--line:#4a4944;--thick:#ecebe5;--accent:#7fa6f0;--solved:#6fcf97;--err:#ff7b6b;--btn:#ecebe5;--btnfg:#171716}}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;flex-direction:column;align-items:center;padding:24px 16px}
+h1{font-size:1.5rem;margin:0 0 4px}
+p.sub{margin:0 0 20px;color:var(--muted);font-size:.9rem;text-align:center}
+#board{display:grid;grid-template-columns:repeat(9,1fr);width:min(92vw,432px);aspect-ratio:1;border:3px solid var(--thick);background:var(--line);gap:1px}
+#board input{width:100%;height:100%;box-sizing:border-box;border:0;background:var(--cell);color:var(--fg);text-align:center;font-size:clamp(16px,5vw,24px);font-weight:600;padding:0;outline:none;border-radius:0;caret-color:var(--accent)}
+#board input:focus{background:color-mix(in srgb,var(--accent) 18%,var(--cell))}
+#board input.solved{color:var(--solved);font-weight:500}
+#board input.bad{background:color-mix(in srgb,var(--err) 25%,var(--cell))}
+#board input:nth-child(3n){border-right:2px solid var(--thick)}
+#board input:nth-child(9n){border-right:0}
+#board input:nth-child(n+19):nth-child(-n+27),#board input:nth-child(n+46):nth-child(-n+54){border-bottom:2px solid var(--thick)}
+#board input.trying{color:var(--accent)}
+#board input.cur-p{background:color-mix(in srgb,var(--accent) 30%,var(--cell))}
+#board input.cur-b{background:color-mix(in srgb,var(--err) 30%,var(--cell))}
+.speed{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:.85rem;color:var(--muted)}
+#log{margin-top:10px;font-size:.85rem;color:var(--muted);text-align:center;min-height:1.3em}
+.row{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap;justify-content:center}
+button{font:inherit;font-weight:600;padding:10px 18px;border-radius:8px;border:1px solid var(--btn);background:transparent;color:var(--fg);cursor:pointer}
+button.primary{background:var(--btn);color:var(--btnfg)}
+#msg{margin-top:14px;min-height:1.4em;font-size:.95rem;text-align:center}
+#msg.ok{color:var(--solved)}#msg.err{color:var(--err)}
+</style>
+</head>
+<body>
+<h1>Sudoku Solver</h1>
+<p class="sub">Type your puzzle (leave blanks empty), then hit Solve.</p>
+<div id="board"></div>
+<div class="row">
+<button class="primary" id="solve">Solve</button>
+<button id="sample">Sample</button>
+<button id="sampleAns">Sample + Answer</button>
+<button id="dry">Dry Run</button>
+<button id="clear">Clear</button>
+</div>
+<div class="speed">Speed <span>slow</span><input type="range" id="speed" min="1" max="5" value="3"><span>fast</span></div>
+<div id="log"></div>
+<div id="msg"></div>
+<script>
+const SAMPLE=[[5,3,0,0,7,0,0,0,0],[6,0,0,1,9,5,0,0,0],[0,9,8,0,0,0,0,6,0],[8,0,0,0,6,0,0,0,3],[4,0,0,8,0,3,0,0,1],[7,0,0,0,2,0,0,0,6],[0,6,0,0,0,0,2,8,0],[0,0,0,4,1,9,0,0,5],[0,0,0,0,8,0,0,7,9]];
+const boardEl=document.getElementById('board'),msg=document.getElementById('msg');
+const cells=[];
+for(let i=0;i<81;i++){
+  const c=document.createElement('input');
+  c.inputMode='numeric';c.maxLength=1;c.autocomplete='off';
+  c.addEventListener('input',()=>{
+    c.value=c.value.replace(/[^1-9]/g,'');
+    c.classList.remove('solved','bad');msg.textContent='';msg.className='';
+    if(c.value&&i<80)cells[i+1].focus();
+  });
+  c.addEventListener('focus',()=>c.select());
+  c.addEventListener('keydown',e=>{
+    const m={ArrowLeft:-1,ArrowRight:1,ArrowUp:-9,ArrowDown:9}[e.key];
+    if(m&&cells[i+m]){e.preventDefault();cells[i+m].focus();}
+    if(e.key==='Backspace'&&!c.value&&i>0)cells[i-1].focus();
+  });
+  cells.push(c);boardEl.appendChild(c);
+}
+function readGrid(){return Array.from({length:9},(_,r)=>Array.from({length:9},(_,c)=>+cells[r*9+c].value||0));}
+// Same logic as the C++ isSafe()
+function isSafe(g,row,col,num){
+  for(let x=0;x<9;x++)if(g[row][x]===num)return false;
+  for(let x=0;x<9;x++)if(g[x][col]===num)return false;
+  const sr=row-row%3,sc=col-col%3;
+  for(let i=0;i<3;i++)for(let j=0;j<3;j++)if(g[i+sr][j+sc]===num)return false;
+  return true;
+}
+// Same backtracking as the C++ solve()
+function solve(g){
+  let row=-1,col=-1;
+  outer:for(let i=0;i<9;i++)for(let j=0;j<9;j++)if(g[i][j]===0){row=i;col=j;break outer;}
+  if(row===-1)return true;
+  for(let num=1;num<=9;num++){
+    if(isSafe(g,row,col,num)){
+      g[row][col]=num;
+      if(solve(g))return true;
+      g[row][col]=0;
+    }
+  }
+  return false;
+}
+// Check the given clues don't already conflict
+function findConflicts(g){
+  const bad=new Set();
+  for(let r=0;r<9;r++)for(let c=0;c<9;c++){
+    const v=g[r][c];if(!v)continue;
+    g[r][c]=0;
+    if(!isSafe(g,r,c,v))bad.add(r*9+c);
+    g[r][c]=v;
+  }
+  return bad;
+}
+document.getElementById('solve').onclick=()=>{
+  cells.forEach(c=>c.classList.remove('solved','bad'));
+  const g=readGrid(),given=g.map(r=>r.slice());
+  const bad=findConflicts(g);
+  if(bad.size){bad.forEach(i=>cells[i].classList.add('bad'));msg.textContent='Some numbers conflict. Check the red cells.';msg.className='err';return;}
+  const t=performance.now();
+  if(solve(g)){
+    for(let r=0;r<9;r++)for(let c=0;c<9;c++){
+      const cell=cells[r*9+c];cell.value=g[r][c];
+      if(!given[r][c])cell.classList.add('solved');
+    }
+    msg.textContent='Solved in '+Math.round(performance.now()-t)+' ms';msg.className='ok';
+  }else{msg.textContent='No solution exists for this Sudoku configuration.';msg.className='err';}
+};
+document.getElementById('sample').onclick=()=>{
+  SAMPLE.forEach((row,r)=>row.forEach((v,c)=>{const e=cells[r*9+c];e.value=v||'';e.classList.remove('solved','bad');}));
+  msg.textContent='';msg.className='';
+};
+document.getElementById('sampleAns').onclick=()=>{
+  document.getElementById('sample').click();
+  document.getElementById('solve').click();
+};
+// ---- Dry run: same backtracking, but yields every step ----
+function* solveSteps(g){
+  let row=-1,col=-1;
+  outer:for(let i=0;i<9;i++)for(let j=0;j<9;j++)if(g[i][j]===0){row=i;col=j;break outer;}
+  if(row===-1)return true;
+  for(let num=1;num<=9;num++){
+    if(isSafe(g,row,col,num)){
+      g[row][col]=num;
+      yield {row,col,num,type:'place'};
+      if(yield* solveSteps(g))return true;
+      g[row][col]=0;
+      yield {row,col,num,type:'back'};
+    }
+  }
+  return false;
+}
+let runId=0,running=false,givenSnap=null;
+const dryBtn=document.getElementById('dry'),logEl=document.getElementById('log'),speedEl=document.getElementById('speed');
+function stopDry(){
+  runId++;running=false;dryBtn.textContent='Dry Run';
+  if(givenSnap){givenSnap.forEach((v,i)=>cells[i].value=v||'');givenSnap=null;}
+  cells.forEach(c=>c.classList.remove('cur-p','cur-b','trying'));
+  logEl.textContent='';
+}
+// any other button stops a running dry run first (capture = runs before its own handler)
+document.addEventListener('click',e=>{
+  const b=e.target.closest('button');
+  if(b&&b.id!=='dry'&&running)stopDry();
+},true);
+dryBtn.onclick=async()=>{
+  if(running){stopDry();return;}
+  cells.forEach(c=>c.classList.remove('solved','bad'));
+  msg.textContent='';msg.className='';
+  const g=readGrid(),bad=findConflicts(g);
+  if(bad.size){bad.forEach(i=>cells[i].classList.add('bad'));msg.textContent='Some numbers conflict. Check the red cells.';msg.className='err';return;}
+  givenSnap=g.flat();
+  const my=++runId;running=true;dryBtn.textContent='Stop';
+  const delays=[700,300,100,25,0];
+  const it=solveSteps(g);
+  let steps=0,backs=0,prev=null,fin=null;
+  while(runId===my&&fin===null){
+    const d=delays[+speedEl.value-1],batch=d?1:30;
+    for(let k=0;k<batch;k++){
+      const r=it.next();
+      if(r.done){fin=r.value;break;}
+      const {row,col,num,type}=r.value,cell=cells[row*9+col];
+      if(prev)prev.classList.remove('cur-p','cur-b');
+      steps++;
+      if(type==='place'){
+        cell.value=num;cell.classList.add('trying','cur-p');
+        logEl.textContent='Step '+steps+': try '+num+' at row '+(row+1)+', col '+(col+1);
+      }else{
+        backs++;cell.value='';cell.classList.remove('trying');cell.classList.add('cur-b');
+        logEl.textContent='Step '+steps+': dead end, remove '+num+' from row '+(row+1)+', col '+(col+1);
+      }
+      prev=cell;
+    }
+    if(fin===null)await new Promise(r=>setTimeout(r,d));
+  }
+  if(runId!==my)return;
+  cells.forEach(c=>{
+    c.classList.remove('cur-p','cur-b');
+    if(c.classList.contains('trying')){c.classList.remove('trying');c.classList.add('solved');}
+  });
+  running=false;givenSnap=null;dryBtn.textContent='Dry Run';logEl.textContent='';
+  if(fin){msg.textContent='Solved in '+steps+' steps ('+backs+' backtracks)';msg.className='ok';}
+  else{msg.textContent='No solution exists for this Sudoku configuration.';msg.className='err';}
+};
+document.getElementById('clear').onclick=()=>{
+  cells.forEach(c=>{c.value='';c.classList.remove('solved','bad');});
+  msg.textContent='';msg.className='';cells[0].focus();
+};
+</script>
+</body>
+</html>
